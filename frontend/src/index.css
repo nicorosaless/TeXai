@@ -1,0 +1,196 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 43 30% 5%;
+    --foreground: 40 6% 90%;
+
+    --card: 43 25% 7%;
+    --card-foreground: 40 6% 90%;
+
+    --popover: 43 25% 8%;
+    --popover-foreground: 40 6% 90%;
+
+    --primary: 40 45% 55%;
+    --primary-foreground: 43 30% 5%;
+
+    --secondary: 43 20% 12%;
+    --secondary-foreground: 40 6% 80%;
+
+    --muted: 43 15% 16%;
+    --muted-foreground: 40 4% 50%;
+
+    --accent: 40 45% 55%;
+    --accent-foreground: 43 30% 5%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 40 6% 98%;
+
+    --border: 43 15% 16%;
+    --input: 43 20% 12%;
+    --ring: 40 45% 55%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 43 30% 4%;
+    --sidebar-foreground: 40 6% 70%;
+    --sidebar-primary: 40 45% 55%;
+    --sidebar-primary-foreground: 43 30% 5%;
+    --sidebar-accent: 43 20% 10%;
+    --sidebar-accent-foreground: 40 6% 90%;
+    --sidebar-border: 43 15% 14%;
+    --sidebar-ring: 40 45% 55%;
+
+    --editor-bg: 43 25% 6%;
+    --editor-line: 43 15% 10%;
+    --editor-selection: 40 45% 55%;
+    --preview-bg: 0 0% 100%;
+    --preview-foreground: 0 0% 10%;
+    --chat-input-bg: 43 20% 10%;
+    --suggestion-border: 43 15% 20%;
+    --suggestion-hover: 43 15% 14%;
+  }
+
+  .dark {
+    --background: 240 6% 4%;
+    --foreground: 40 6% 90%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted));
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+@layer components {
+  .chat-message {
+    @apply p-3 rounded-lg;
+  }
+
+  .chat-message-user {
+    @apply bg-secondary text-secondary-foreground;
+  }
+
+  .chat-message-assistant {
+    @apply bg-transparent text-foreground;
+  }
+
+  .suggestion-chip {
+    @apply px-4 py-2.5 rounded-full border border-[hsl(var(--suggestion-border))] 
+           bg-transparent text-muted-foreground text-sm
+           hover:bg-[hsl(var(--suggestion-hover))] hover:text-foreground
+           transition-all duration-200 cursor-pointer
+           flex items-center gap-2;
+  }
+
+  .editor-line-number {
+    @apply select-none pr-4 text-right;
+    min-width: 3rem;
+    color: hsl(40, 4%, 50%) !important;
+    opacity: 0.8;
+    font-weight: 400;
+  }
+
+  .latex-keyword {
+    @apply text-primary;
+  }
+
+  .latex-command {
+    @apply text-[hsl(200,70%,60%)];
+  }
+
+  .latex-bracket {
+    @apply text-[hsl(30,70%,60%)];
+  }
+
+  .latex-comment {
+    @apply text-muted-foreground/60 italic;
+  }
+
+  /* Resize handle styles */
+  [data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id] {
+    @apply w-1 bg-border hover:bg-primary/50 transition-colors duration-150;
+  }
+
+  [data-panel-resize-handle-id]:hover > div {
+    @apply bg-primary/50;
+  }
+
+  /* Diff styles */
+  .diff-added {
+    @apply bg-green-500/10 text-green-400;
+  }
+
+  .diff-removed {
+    @apply bg-red-500/10 text-red-400;
+  }
+
+  /* Animation for chat messages */
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  /* Bounce animation for loading dots */
+  @keyframes bounce {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+
+  .animate-bounce {
+    animation: bounce 0.6s infinite;
+  }
+}
