@@ -1,0 +1,2 @@
+# LaTeX AI Backend Application
+
