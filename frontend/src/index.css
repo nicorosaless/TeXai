@@ -71,7 +71,9 @@
     font-family: 'Inter', system-ui, sans-serif;
   }
 
-  code, pre, .font-mono {
+  code,
+  pre,
+  .font-mono {
     font-family: 'JetBrains Mono', monospace;
   }
 }
@@ -115,11 +117,7 @@
   }
 
   .suggestion-chip {
-    @apply px-4 py-2.5 rounded-full border border-[hsl(var(--suggestion-border))] 
-           bg-transparent text-muted-foreground text-sm
-           hover:bg-[hsl(var(--suggestion-hover))] hover:text-foreground
-           transition-all duration-200 cursor-pointer
-           flex items-center gap-2;
+    @apply px-4 py-2.5 rounded-full border border-[hsl(var(--suggestion-border))] bg-transparent text-muted-foreground text-sm hover:bg-[hsl(var(--suggestion-hover))] hover:text-foreground transition-all duration-200 cursor-pointer flex items-center gap-2;
   }
 
   .editor-line-number {
@@ -135,11 +133,11 @@
   }
 
   .latex-command {
-    @apply text-[hsl(200,70%,60%)];
+    @apply text-[hsl(200, 70%, 60%)];
   }
 
   .latex-bracket {
-    @apply text-[hsl(30,70%,60%)];
+    @apply text-[hsl(30, 70%, 60%)];
   }
 
   .latex-comment {
@@ -147,11 +145,11 @@
   }
 
   /* Resize handle styles */
-  [data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id] {
+  [data-panel-group-direction="horizontal"]>[data-panel-resize-handle-id] {
     @apply w-1 bg-border hover:bg-primary/50 transition-colors duration-150;
   }
 
-  [data-panel-resize-handle-id]:hover > div {
+  [data-panel-resize-handle-id]:hover>div {
     @apply bg-primary/50;
   }
 
@@ -170,6 +168,7 @@
       opacity: 0;
       transform: translateY(8px);
     }
+
     to {
       opacity: 1;
       transform: translateY(0);
@@ -180,17 +179,38 @@
     animation: fadeIn 0.2s ease-out;
   }
 
-  /* Bounce animation for loading dots */
-  @keyframes bounce {
-    0%, 100% {
-      transform: translateY(0);
+  /* Glowing text animation for generating state */
+  @keyframes glow-sweep {
+    0% {
+      background-position: -200% 0;
     }
-    50% {
-      transform: translateY(-4px);
+
+    100% {
+      background-position: 200% 0;
     }
   }
 
-  .animate-bounce {
-    animation: bounce 0.6s infinite;
+  .animate-glow-text {
+    background: linear-gradient(90deg,
+        hsl(var(--muted-foreground)) 0%,
+        hsl(var(--muted-foreground)) 40%,
+        hsl(var(--primary)) 50%,
+        hsl(var(--muted-foreground)) 60%,
+        hsl(var(--muted-foreground)) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: glow-sweep 2s linear infinite;
   }
+}
+
+/* Draggable region utilities */
+.app-drag-region {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
 }

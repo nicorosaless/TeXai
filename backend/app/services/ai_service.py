@@ -7,10 +7,94 @@ import os
 import json
 import re
 import subprocess
-from typing import List, Optional, AsyncGenerator
+from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
 from app.core.config import settings
 from app.models.schemas import Message, MessageRole
 
+
+def parse_llm_response(response_text: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Parse LLM response to extract explanation and JSON changes.
+    
+    Returns:
+        Tuple of (explanation_text, list_of_changes)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Try to find JSON block in response (various formats)
+    # Pattern 1: ```json ... ```
+    json_match = re.search(r'```json\s*([\s\S]*?)```', response_text)
+    
+    if json_match:
+        json_str = json_match.group(1).strip()
+        logger.info(f"Found JSON block: {json_str[:200]}...")
+        try:
+            data = json.loads(json_str)
+            changes = data.get("changes", [])
+            # Get explanation (everything before the JSON block)
+            explanation = response_text[:json_match.start()].strip()
+            logger.info(f"Parsed {len(changes)} changes successfully")
+            return explanation, changes
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON decode error: {e}")
+            pass
+    
+    # Pattern 2: Look for {"changes": [...]} anywhere
+    json_match = re.search(r'\{\s*"changes"\s*:\s*\[[\s\S]*?\]\s*\}', response_text)
+    if json_match:
+        try:
+            data = json.loads(json_match.group())
+            changes = data.get("changes", [])
+            explanation = response_text[:json_match.start()].strip()
+            logger.info(f"Parsed {len(changes)} changes from raw JSON")
+            return explanation, changes
+        except json.JSONDecodeError as e:
+            logger.warning(f"Raw JSON decode error: {e}")
+            pass
+    
+    # No JSON found - return full response as explanation with no changes
+    logger.info("No JSON changes found in response")
+    return response_text, []
+
+
+def apply_changes(original: str, changes: List[Dict[str, Any]]) -> str:
+    """
+    Apply a list of changes to the original LaTeX document.
+    
+    Each change is a dict with:
+    - type: "replace" | "delete" | "insert_after"
+    - search: exact text to find
+    - replace: new text (for "replace")
+    - content: text to insert (for "insert_after")
+    
+    Returns:
+        Modified document string
+    """
+    result = original
+    
+    for change in changes:
+        change_type = change.get("type", "")
+        search = change.get("search", "")
+        
+        if not search:
+            continue
+            
+        if change_type == "replace":
+            replace_with = change.get("replace", "")
+            result = result.replace(search, replace_with, 1)
+            
+        elif change_type == "delete":
+            result = result.replace(search, "", 1)
+            
+        elif change_type == "insert_after":
+            content = change.get("content", "")
+            idx = result.find(search)
+            if idx >= 0:
+                insert_pos = idx + len(search)
+                result = result[:insert_pos] + content + result[insert_pos:]
+    
+    return result
 
 class AIService:
     """Servicio principal de IA usando Ollama"""
@@ -73,24 +157,33 @@ class AIService:
     
     def _build_system_prompt(self) -> str:
         """Construye el prompt del sistema para el asistente de LaTeX"""
-        return """Eres un asistente experto en LaTeX especializado en ayudar a usuarios a crear, mejorar y corregir documentos LaTeX.
+        return """You are an expert LaTeX assistant. You help users modify their LaTeX documents.
 
-Tu objetivo es:
-1. Entender el contexto del documento LaTeX proporcionado
-2. Responder preguntas sobre el documento
-3. Sugerir mejoras en escritura, formato y estructura
-4. Corregir errores de sintaxis y lógica
-5. Generar código LaTeX cuando sea necesario
-6. Explicar conceptos de LaTeX de manera clara
+RESPONSE FORMAT:
+- For questions about the document: Answer naturally in the user's language.
+- For modification requests: Return a JSON block with changes.
 
-IMPORTANTE:
-- Siempre mantén el contexto del documento completo
-- Cuando el usuario solicite mejoras, correcciones o cambios, SIEMPRE proporciona el código LaTeX completo modificado dentro de un bloque de código con formato: ```latex\n[código completo]\n```
-- El código LaTeX modificado debe ser el documento COMPLETO, no solo fragmentos
-- Sé preciso y técnico, pero también claro y educativo
-- Si el usuario pide mejoras específicas, aplica los cambios directamente al código
-- Responde en español si el usuario escribe en español, en inglés si escribe en inglés
-- Cuando proporciones código modificado, incluye también una breve explicación de los cambios realizados"""
+WHEN MODIFYING THE DOCUMENT, respond with:
+1. A brief explanation of what you'll change (1-2 sentences)
+2. A JSON block with the exact changes:
+
+```json
+{
+  "changes": [
+    {"type": "replace", "search": "exact old text", "replace": "new text"},
+    {"type": "delete", "search": "exact text to remove"},
+    {"type": "insert_after", "search": "text to find", "content": "text to insert after it"}
+  ]
+}
+```
+
+STRICT RULES:
+- "search" MUST be EXACT text copied from the document (character-perfect match)
+- Keep changes minimal - only the specific lines that need to change
+- NEVER return the full document
+- For multi-line search/replace, include the exact lines with newlines
+- Use "replace" for modifications, "delete" for removals, "insert_after" for additions
+- Respond in the user's language for explanations"""
     
     def _prepare_messages(
         self, 
@@ -133,7 +226,7 @@ Asistente:"""
         conversation_history: Optional[List[Message]] = None,
         stream: bool = False,
         model: Optional[str] = None
-    ) -> str:
+    ) -> dict:
         """
         Envía un mensaje al asistente de IA usando Ollama
         
@@ -145,7 +238,8 @@ Asistente:"""
             model: Modelo a usar (opcional, usa el por defecto si no se especifica)
         
         Returns:
-            Respuesta del asistente o generador si stream=True
+            Dict con response y thinking (para modelos CoT como DeepSeek R1)
+            En modo stream, retorna generador con chunks tipados
         """
         prompt = self._prepare_messages(user_message, latex_content, conversation_history)
         model_to_use = model or self.model
@@ -153,7 +247,12 @@ Asistente:"""
         try:
             if stream:
                 async def generate():
-                    async for chunk in self.client.generate(
+                    """
+                    Genera chunks tipados para streaming.
+                    Cada chunk tiene: type ('thinking' o 'response'), content (texto)
+                    """
+                    # Ollama AsyncClient.generate with stream=True returns an async generator
+                    stream_response = await self.client.generate(
                         model=model_to_use,
                         prompt=prompt,
                         stream=True,
@@ -161,9 +260,14 @@ Asistente:"""
                             "temperature": settings.TEMPERATURE,
                             "num_predict": settings.MAX_TOKENS
                         }
-                    ):
+                    )
+                    async for chunk in stream_response:
+                        # Para modelos CoT como DeepSeek R1, Ollama envía
+                        # 'thinking' en chunks separados antes de 'response'
+                        if chunk.get("thinking"):
+                            yield {"type": "thinking", "content": chunk["thinking"]}
                         if chunk.get("response"):
-                            yield chunk["response"]
+                            yield {"type": "response", "content": chunk["response"]}
                 return generate()
             else:
                 response = await self.client.generate(
@@ -175,7 +279,10 @@ Asistente:"""
                         "num_predict": settings.MAX_TOKENS
                     }
                 )
-                return response.get("response", "")
+                return {
+                    "response": response.get("response", ""),
+                    "thinking": response.get("thinking", None)  # CoT thinking tokens
+                }
         except Exception as e:
             raise RuntimeError(f"Error al comunicarse con Ollama: {str(e)}")
     
@@ -230,102 +337,153 @@ Responde SOLO con un JSON válido con esta estructura:
         except Exception as e:
             raise RuntimeError(f"Error al analizar documento: {str(e)}")
     
-    async def improve_latex(
+    async def improve_latex_stream(
         self,
         latex_content: str,
         improvement_type: str = "all",
+        user_message: Optional[str] = None,
         focus_areas: Optional[List[str]] = None,
         model: Optional[str] = None
-    ) -> dict:
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Mejora un documento LaTeX según el tipo solicitado
+        Mejora un documento LaTeX con streaming.
+        Genera chunks con: type ('thinking', 'message', 'code'), content.
+        """
+        # Build the instruction based on user message or improvement type
+        if user_message:
+            instruction = user_message
+        else:
+            instruction = f"Improve the document (type: {improvement_type})"
         
-        Returns:
-            Dict con el LaTeX mejorado, cambios realizados y explicación
-        """
-        improvement_prompt = f"""You are an expert LaTeX document improver. Improve the following document.
-
+        improvement_prompt = f"""You are an expert LaTeX assistant.
 CURRENT DOCUMENT:
 {latex_content}
 
-Improvement type: {improvement_type}
+USER REQUEST: {instruction}
 
 INSTRUCTIONS:
-1. Make improvements to the LaTeX document based on the improvement type.
-2. Return ONLY the improved LaTeX code, nothing else.
-3. The response must start with \\documentclass and end with \\end{{document}}
-4. Do not include any explanations, just the LaTeX code.
-5. Keep the same document structure but improve the content.
+1. First, provide a brief explanation of the changes you are going to make.
+2. Then, provide the COMPLETE modified LaTeX document.
+3. Wrap the LaTeX code in a markdown block: ```latex ... ```
+4. The document must be complete (start with \\documentclass and end with \\end{{document}}).
 
-Return the complete improved LaTeX document now:"""
-        
+Response structure:
+<Explanation of changes without any headers>
+```latex
+[Complete modified LaTeX code]
+```
+
+IMPORTANT: Do not include headers like "[Explanation of changes]" or "**Explanation:**". Start directly with the explanation text.
+"""
         model_to_use = model or self.model
         
         try:
-            response = await self.client.generate(
+            stream_response = await self.client.generate(
                 model=model_to_use,
                 prompt=improvement_prompt,
-                stream=False,
+                stream=True,
                 options={
                     "temperature": settings.TEMPERATURE,
                     "num_predict": settings.MAX_TOKENS
                 }
             )
             
-            response_text = response.get("response", "").strip()
+            buffer = ""
+            header_checked = False
             
-            # Extraer el código LaTeX mejorado
-            improved_latex = None
-            
-            # Método 1: Buscar bloques de código
-            latex_blocks = re.findall(r'```(?:latex)?\s*\n?(.*?)\n?```', response_text, re.DOTALL)
-            for block in latex_blocks:
-                if '\\documentclass' in block or '\\begin{document}' in block:
-                    improved_latex = block.strip()
-                    break
-            
-            # Método 2: Si no hay bloques, buscar directamente el documento
-            if not improved_latex:
-                # Buscar desde \documentclass hasta \end{document}
-                doc_match = re.search(r'(\\documentclass.*?\\end\{document\})', response_text, re.DOTALL)
-                if doc_match:
-                    improved_latex = doc_match.group(1).strip()
-            
-            # Método 3: Si la respuesta completa parece ser LaTeX
-            if not improved_latex and '\\documentclass' in response_text:
-                improved_latex = response_text.strip()
-                # Limpiar posibles artefactos
-                improved_latex = re.sub(r'^```(?:latex)?\s*\n?', '', improved_latex)
-                improved_latex = re.sub(r'\n?```\s*$', '', improved_latex)
-            
-            # Limpiar el código
-            if improved_latex:
-                improved_latex = improved_latex.strip()
-                # Asegurar que empieza y termina correctamente
-                if not improved_latex.startswith('\\documentclass'):
-                    # Intentar encontrar el inicio
-                    start_idx = improved_latex.find('\\documentclass')
-                    if start_idx >= 0:
-                        improved_latex = improved_latex[start_idx:]
-            
-            # Si no se encontró código válido, usar el original
-            if not improved_latex or '\\documentclass' not in improved_latex:
-                return {
-                    "improved_latex": latex_content,
-                    "changes": [],
-                    "explanation": "Could not generate improvements. Document unchanged."
-                }
-            
-            # Generar explicación basada en los cambios
-            explanation = self._generate_change_summary(latex_content, improved_latex)
-            
-            return {
-                "improved_latex": improved_latex,
-                "changes": [],
-                "explanation": explanation
-            }
+            async for chunk in stream_response:
+                # Handle thinking tokens
+                if chunk.get("thinking"):
+                    yield {"type": "thinking", "content": chunk["thinking"]}
+                
+                # Handle response text
+                if chunk.get("response"):
+                    content = chunk["response"]
+                    
+                    if not header_checked:
+                        buffer += content
+                        # Wait for a reasonable buffer size or newline to check for headers
+                        if len(buffer) > 100 or "\n" in buffer:
+                            # List of headers to strip (case insensitive)
+                            headers_to_strip = [
+                                r'^\[Explanation of changes\]\s*',
+                                r'^\*\*Explicació dels canvis:\*\*\s*',
+                                r'^\*\*Explanation of changes:\*\*\s*',
+                                r'^\*\*Explanation:\*\*\s*',
+                                r'^\*\*Document modificado:\*\*\s*',
+                                r'^\*\*Modified document:\*\*\s*'
+                            ]
+                            
+                            cleaned_buffer = buffer
+                            import re
+                            for pattern in headers_to_strip:
+                                cleaned_buffer = re.sub(pattern, '', cleaned_buffer, flags=re.IGNORECASE).lstrip()
+                            
+                            if cleaned_buffer:
+                                yield {"type": "content", "content": cleaned_buffer}
+                            
+                            buffer = ""
+                            header_checked = True
+                    else:
+                        yield {"type": "content", "content": content}
+
+            # Flush any remaining buffer if we never hit the check condition (short response)
+            if not header_checked and buffer:
+                # Apply same cleaning just in case
+                headers_to_strip = [
+                    r'^\[Explanation of changes\]\s*',
+                    r'^\*\*Explicació dels canvis:\*\*\s*',
+                    r'^\*\*Explanation of changes:\*\*\s*',
+                    r'^\*\*Explanation:\*\*\s*',
+                    r'^\*\*Document modificado:\*\*\s*',
+                    r'^\*\*Modified document:\*\*\s*'
+                ]
+                cleaned_buffer = buffer
+                import re
+                for pattern in headers_to_strip:
+                    cleaned_buffer = re.sub(pattern, '', cleaned_buffer, flags=re.IGNORECASE).lstrip()
+                if cleaned_buffer:
+                    yield {"type": "content", "content": cleaned_buffer}
+                    
         except Exception as e:
             raise RuntimeError(f"Error improving document: {str(e)}")
+
+    # Mantener método antiguo por compatibilidad si es necesario, o eliminarlo/wrapper
+    async def improve_latex(self, *args, **kwargs):
+        """Deprecated: Use improve_latex_stream instead"""
+        # Collect full stream for legacy callers
+        full_response = ""
+        full_thinking = ""
+        generator = self.improve_latex_stream(*args, **kwargs)
+        
+        async for chunk in generator:
+            if chunk["type"] == "content":
+                full_response += chunk["content"]
+            elif chunk["type"] == "thinking":
+                full_thinking += chunk["content"]
+        
+        # Parse result similar to before
+        improved_latex = None
+        latex_blocks = re.findall(r'```(?:latex)?\s*\n?(.*?)\n?```', full_response, re.DOTALL)
+        for block in latex_blocks:
+             if '\\documentclass' in block:
+                improved_latex = block.strip()
+                break
+        
+        if not improved_latex:
+             # Fallback logic...
+             if '\\documentclass' in full_response:
+                 improved_latex = full_response # Simplification for now
+        
+        explanation = full_response
+        if improved_latex:
+            explanation = full_response.replace(improved_latex, "[Code Block]").replace("```latex", "").replace("```", "")
+
+        return {
+            "improved_latex": improved_latex or kwargs.get("latex_content", ""),
+            "changes": [],
+            "explanation": explanation.strip()
+        }
     
     def _generate_change_summary(self, original: str, modified: str) -> str:
         """Genera un resumen de los cambios realizados"""

@@ -46,3 +46,14 @@ async def get_current_model():
         "base_url": ai_service.base_url
     }
 
+
+@router.post("/models/current")
+async def set_current_model(model_name: str):
+    """
+    Sets the current model to use for AI operations
+    """
+    ai_service.model = model_name
+    return {
+        "model": ai_service.model,
+        "status": "updated"
+    }

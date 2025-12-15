@@ -34,9 +34,17 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response del chat"""
     message: str = Field(..., description="Respuesta del asistente")
+    thinking: Optional[str] = Field(
+        default=None,
+        description="Thinking tokens for CoT models like DeepSeek R1"
+    )
     suggestions: Optional[List[str]] = Field(
         default=None, 
         description="Sugerencias de acciones adicionales"
+    )
+    changes: Optional[List[dict]] = Field(
+        default=None,
+        description="List of changes to apply: {type, search, replace/content}"
     )
     modified_latex: Optional[str] = Field(
         default=None, 
@@ -61,6 +69,10 @@ class AnalysisResponse(BaseModel):
 class ImproveRequest(BaseModel):
     """Request para mejorar documento"""
     latex_content: str = Field(..., description="Contenido del documento LaTeX")
+    user_message: Optional[str] = Field(
+        default=None,
+        description="User's specific instruction for the modification"
+    )
     improvement_type: Literal[
         "writing", 
         "formatting", 
@@ -72,6 +84,7 @@ class ImproveRequest(BaseModel):
         default=None, 
         description="Áreas específicas en las que enfocarse"
     )
+    stream: bool = Field(default=False, description="Si se debe hacer streaming de la respuesta")
 
 
 class ImproveResponse(BaseModel):

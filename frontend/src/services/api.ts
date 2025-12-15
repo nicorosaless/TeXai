@@ -16,9 +16,18 @@ export interface ChatRequest {
   stream?: boolean;
 }
 
+export interface LatexChange {
+  type: "replace" | "delete" | "insert_after";
+  search: string;
+  replace?: string;  // For "replace"
+  content?: string;  // For "insert_after"
+}
+
 export interface ChatResponse {
   message: string;
+  thinking?: string;
   suggestions?: string[];
+  changes?: LatexChange[];
   modified_latex?: string;
 }
 
@@ -52,8 +61,10 @@ export interface AnalysisResponse {
 
 export interface ImproveRequest {
   latex_content: string;
+  user_message?: string;
   improvement_type?: "writing" | "formatting" | "equations" | "structure" | "all";
   focus_areas?: string[];
+  stream?: boolean;
 }
 
 export interface ImproveResponse {
@@ -93,7 +104,7 @@ class ApiService {
   /**
    * Envía un mensaje al asistente de IA
    */
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/chat`, {
         method: "POST",
@@ -104,6 +115,7 @@ class ApiService {
           ...request,
           stream: false,
         }),
+        signal,
       });
 
       if (!response.ok) {
@@ -113,8 +125,74 @@ class ApiService {
 
       return await response.json();
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error; // Re-throw abort errors
+      }
       console.error("Error en chat:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Streaming chat for progressive display of thinking and response
+   * Returns an async generator that yields typed chunks
+   */
+  async *chatStream(
+    request: ChatRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<{ type: 'thinking' | 'response' | 'error' | 'done' | 'changes'; content: string; changes?: LatexChange[]; modified_latex?: string }> {
+    const response = await fetch(`${this.baseUrl}/api/v1/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...request,
+        stream: true,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: "Error desconocido" }));
+      throw new Error(error.detail || `Error ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("No response body");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") {
+              yield { type: "done", content: "" };
+              return;
+            }
+            try {
+              const parsed = JSON.parse(data);
+              yield parsed;
+            } catch {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
     }
   }
 
@@ -156,9 +234,11 @@ class ApiService {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          latex_content: request.latex_content,
+          user_message: request.user_message,
           improvement_type: request.improvement_type || "all",
           focus_areas: request.focus_areas,
-          latex_content: request.latex_content,
+          stream: false
         }),
       });
 
@@ -171,6 +251,68 @@ class ApiService {
     } catch (error) {
       console.error("Error en mejora:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Mejora un documento LaTeX con streaming
+   */
+  async *improveStream(
+    request: ImproveRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<{ type: 'thinking' | 'content' | 'error' | 'done'; content: string }> {
+    const response = await fetch(`${this.baseUrl}/api/v1/improve`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...request,
+        stream: true,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: "Error desconocido" }));
+      throw new Error(error.detail || `Error ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("No response body");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") {
+              yield { type: "done", content: "" };
+              return;
+            }
+            try {
+              const parsed = JSON.parse(data);
+              yield parsed;
+            } catch {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
     }
   }
 
@@ -218,6 +360,33 @@ class ApiService {
       return await response.json();
     } catch (error) {
       console.error("Error al obtener modelo actual:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Establece el modelo actual
+   */
+  async setCurrentModel(modelName: string): Promise<{ model: string; status: string }> {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/api/v1/models/current?model_name=${encodeURIComponent(modelName)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: "Error desconocido" }));
+        throw new Error(error.detail || `Error ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Error al establecer modelo:", error);
       throw error;
     }
   }
@@ -280,4 +449,3 @@ class ApiService {
 }
 
 export const apiService = new ApiService();
-

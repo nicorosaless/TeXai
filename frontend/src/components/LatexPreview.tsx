@@ -118,12 +118,12 @@ function compileLatexToHtml(latex: string): string {
   });
 
   // Figures (simplified)
-  html = html.replace(/\\begin\{figure\}[\s\S]*?\\includegraphics.*?\{([^}]*)\}[\s\S]*?\\caption\{([^}]*)\}[\s\S]*?\\end\{figure\}/g, 
+  html = html.replace(/\\begin\{figure\}[\s\S]*?\\includegraphics.*?\{([^}]*)\}[\s\S]*?\\caption\{([^}]*)\}[\s\S]*?\\end\{figure\}/g,
     '<figure class="figure"><div class="figure-placeholder">[$1]</div><figcaption>$2</figcaption></figure>'
   );
 
   // Simple includegraphics
-  html = html.replace(/\\includegraphics(\[[^\]]*\])?\{([^}]*)\}/g, 
+  html = html.replace(/\\includegraphics(\[[^\]]*\])?\{([^}]*)\}/g,
     '<div class="figure-placeholder">Image: $2</div>'
   );
 
@@ -186,14 +186,55 @@ export function LatexPreview({ content }: LatexPreviewProps) {
       const html = compileLatexToHtml(content);
       setCompiledHtml(html);
       setIsCompiling(false);
-    }, 100);
+    }, 300); // Small delay for debouncing
 
     return () => clearTimeout(timer);
   }, [content]);
 
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+
+  const outerContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!outerContainerRef.current) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+
+    observer.observe(outerContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  // Measure content height to ensure correct scrolling
+  const [contentHeight, setContentHeight] = useState<number>(1056);
+
+  useEffect(() => {
+    // Only measure when content or width changes
+    // We measure the scrollHeight of the inner container to see how tall the text is
+    const measure = () => {
+      if (containerRef.current) {
+        // Reset height temporarily to natural size
+        setContentHeight(Math.max(1056, containerRef.current.scrollHeight));
+      }
+    };
+    // Debounce slightly
+    const timer = setTimeout(measure, 100);
+    return () => clearTimeout(timer);
+  }, [compiledHtml, containerWidth, zoom]); // Re-measure on key changes
+
+  // Calculate generic fit scale (with 40px padding safety)
+  // 816px is the fixed width of the doc
+  // Ensure scale doesn't go below 0.1 or become negative
+  const fitScale = containerWidth ? Math.max(0.1, Math.min(1, (containerWidth - 64) / 816)) : 1;
+  const effectiveScale = (zoom / 100) * fitScale;
+
   return (
-    <div className="flex-1 flex flex-col bg-preview">
-      <div className="h-12 border-b border-border bg-card flex items-center justify-between px-4">
+    <div className="flex-1 flex flex-col bg-preview h-full w-full">
+      <div className="h-12 border-b border-border bg-card flex items-center justify-between pl-4 pr-4">
+        {/* ... (Header same as before) ... */}
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-foreground">Preview</span>
           {isCompiling && (
@@ -224,16 +265,28 @@ export function LatexPreview({ content }: LatexPreviewProps) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-preview p-8 scrollbar-thin">
+      <div
+        ref={outerContainerRef}
+        className="flex-1 overflow-auto bg-gray-100/50 p-8 scrollbar-thin relative w-full h-full flex flex-col items-center"
+      >
+        {/* Wrapper handles the SCROLLED size */}
         <div
-          ref={containerRef}
-          className="max-w-3xl mx-auto bg-white shadow-lg rounded-lg p-12 text-preview-foreground"
           style={{
-            transform: `scale(${zoom / 100})`,
-            transformOrigin: "top center",
+            width: 816 * effectiveScale,
+            height: contentHeight * effectiveScale,
+            flexShrink: 0
           }}
+          className="relative my-4 transition-all duration-100"
         >
-          <style>{`
+          <div
+            ref={containerRef}
+            className="w-[816px] min-h-[1056px] bg-white shadow-xl text-black origin-top-left"
+            style={{
+              transform: `scale(${effectiveScale})`,
+              padding: "2.5cm"
+            }}
+          >
+            <style>{`
             .latex-document {
               font-family: 'Times New Roman', 'Computer Modern', serif;
               font-size: 12pt;
@@ -334,7 +387,8 @@ export function LatexPreview({ content }: LatexPreviewProps) {
               padding: 0 0.25em;
             }
           `}</style>
-          <div dangerouslySetInnerHTML={{ __html: compiledHtml }} />
+            <div dangerouslySetInnerHTML={{ __html: compiledHtml }} />
+          </div>
         </div>
       </div>
     </div>

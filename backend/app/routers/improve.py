@@ -41,9 +41,30 @@ async def improve_latex(request: ImproveRequest):
             )
         
         # Realizar mejora
+        if request.stream:
+            from fastapi.responses import StreamingResponse
+            import json
+
+            async def improve_generator():
+                async for chunk in ai_service.improve_latex_stream(
+                    latex_content=request.latex_content,
+                    improvement_type=request.improvement_type,
+                    user_message=request.user_message,
+                    focus_areas=request.focus_areas
+                ):
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                improve_generator(),
+                media_type="text/event-stream"
+            )
+
+        # Standard request
         result = await ai_service.improve_latex(
             latex_content=request.latex_content,
             improvement_type=request.improvement_type,
+            user_message=request.user_message,
             focus_areas=request.focus_areas
         )
         
