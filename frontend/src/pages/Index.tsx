@@ -360,6 +360,7 @@ const Index = () => {
                             onDiffChange={handleDiffChange}
                             fileName={openFiles.find(f => f.path === currentFilePath)?.name}
                             onOpenFile={handleOpenFile}
+                            projectDir={workspace || undefined}
                         />
                     </ResizablePanel>
 
@@ -367,7 +368,7 @@ const Index = () => {
 
                     {/* Preview Panel */}
                     <ResizablePanel defaultSize={38} minSize={30} order={3}>
-                        <LatexPreview content={latexContent} />
+                        <LatexPreview content={latexContent} projectDir={workspace || undefined} />
                     </ResizablePanel>
                 </ResizablePanelGroup>
             </div>

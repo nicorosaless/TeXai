@@ -206,6 +206,94 @@ ipcMain.handle('directory:readFiles', async (event, dirPath) => {
   }
 });
 
+// Image management IPC Handlers
+ipcMain.handle('image:save', async (event, projectDir, fileName, base64Data) => {
+  try {
+    const imagesDir = path.join(projectDir, 'images');
+
+    // Create images directory if it doesn't exist
+    try {
+      await fs.access(imagesDir);
+    } catch {
+      await fs.mkdir(imagesDir, { recursive: true });
+    }
+
+    // Decode base64 and save file
+    const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Content, 'base64');
+    const filePath = path.join(imagesDir, fileName);
+
+    await fs.writeFile(filePath, buffer);
+
+    return {
+      success: true,
+      path: filePath,
+      name: fileName
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('image:list', async (event, projectDir) => {
+  try {
+    const imagesDir = path.join(projectDir, 'images');
+
+    // Check if images directory exists
+    try {
+      await fs.access(imagesDir);
+    } catch {
+      // Directory doesn't exist, return empty list
+      return {
+        success: true,
+        images: []
+      };
+    }
+
+    const files = await fs.readdir(imagesDir);
+    const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'];
+
+    const imageFiles = files.filter(file => {
+      const ext = path.extname(file).toLowerCase();
+      return imageExtensions.includes(ext);
+    });
+
+    const images = imageFiles.map(file => ({
+      name: file,
+      path: path.join(imagesDir, file)
+    }));
+
+    return {
+      success: true,
+      images
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('image:delete', async (event, projectDir, fileName) => {
+  try {
+    const filePath = path.join(projectDir, 'images', fileName);
+    await fs.unlink(filePath);
+
+    return {
+      success: true
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
 // App lifecycle
 app.whenReady().then(() => {
   startBackend();

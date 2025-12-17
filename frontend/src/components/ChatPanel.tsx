@@ -157,13 +157,10 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // State for Thinking expansion
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
 
   useEffect(() => {
     loadCurrentModel();
@@ -233,6 +230,25 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
     const userInput = input;
     setInput("");
     setIsLoading(true);
+
+    // Scroll user message to ~60% from top of container
+    setTimeout(() => {
+      const userMsgEl = document.getElementById(`message-${userMessage.id}`);
+      const container = scrollContainerRef.current;
+
+      if (userMsgEl && container) {
+        const containerRect = container.getBoundingClientRect();
+        const userMsgRect = userMsgEl.getBoundingClientRect();
+        // Position message at 60% from top (40% from bottom)
+        const targetOffset = containerRect.height * 0.4; // 40% padding from top = message at 40% height
+        const scrollOffset = container.scrollTop + (userMsgRect.top - containerRect.top) - targetOffset;
+
+        container.scrollTo({
+          top: Math.max(0, scrollOffset),
+          behavior: "smooth"
+        });
+      }
+    }, 50);
 
     try {
       let accumulatedThinking = "";
@@ -360,7 +376,7 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
             <p className="text-sm text-muted-foreground">
@@ -369,7 +385,7 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
           </div>
         ) : (
           messages.map((message) => (
-            <div key={message.id} className="animate-fade-in space-y-2">
+            <div key={message.id} id={`message-${message.id}`} className="animate-fade-in space-y-2">
               {/* User message */}
               {message.role === "user" && (
                 <div className="flex justify-end">
@@ -407,13 +423,32 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
                   {/* Explanation - Moved BEFORE Diff per user request */}
                   <div className="space-y-1 mb-3">
                     <div className="text-sm text-foreground whitespace-pre-wrap">
-                      {message.content
-                        .replace(/```latex[\s\S]*$/, '')      // Remove LaTeX block at end
-                        .replace(/```json[\s\S]*?```/g, '')   // Remove JSON blocks
-                        .replace(/\[Explanation of changes\]/gi, '') // Remove specific bracket header
-                        .replace(/\*\*(Explicació.*|Document.*|Explanation.*|Modified document.*)\*\*[:\s]*\n?/gi, '') // Remove bold headers
-                        .trim() ||
-                        (message.isStreaming && !message.content ? <span className="animate-pulse">Generating response...</span> : message.content.replace(/```latex[\s\S]*$/, '').trim())}
+                      {(() => {
+                        const cleanedContent = message.content
+                          .replace(/```latex[\s\S]*$/, '')      // Remove LaTeX block at end
+                          .replace(/```json[\s\S]*?```/g, '')   // Remove JSON blocks
+                          .replace(/\[Explanation of changes\]/gi, '') // Remove specific bracket header
+                          .replace(/\*\*(Explicació.*|Document.*|Explanation.*|Modified document.*)\*\*[:\s]*\n?/gi, '') // Remove bold headers
+                          .trim();
+
+                        return (
+                          <>
+                            {cleanedContent}
+                            {message.isStreaming && (
+                              <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
+                                {!cleanedContent ? (
+                                  <span>Generating response...</span>
+                                ) : (
+                                  <>
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    <span className="text-xs">Applying changes...</span>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -501,6 +536,16 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
               )}
             </div>
           ))
+        )}
+        {/* Spacer: ensures there's room to scroll user message to desired position */}
+        {messages.length > 0 && (
+          <div
+            style={{
+              minHeight: '60%',
+              flexShrink: 0
+            }}
+            aria-hidden="true"
+          />
         )}
         <div ref={messagesEndRef} />
       </div>

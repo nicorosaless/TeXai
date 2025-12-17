@@ -1,14 +1,16 @@
-import { useRef, useState, useMemo } from "react";
+import { useRef, useState, useMemo, useEffect } from "react";
 import { Copy, Download, RotateCcw, Image, Upload, X, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { DiffLine } from "@/lib/diffUtils";
+import * as electronApi from "@/services/electronApi";
 
 interface UploadedImage {
   id: string;
   name: string;
-  url: string;
+  url: string; // For display (file:// URL or data URL)
   latexRef: string;
+  filePath?: string; // Actual path on disk
 }
 
 interface LatexEditorProps {
@@ -18,6 +20,7 @@ interface LatexEditorProps {
   onDiffChange?: (newContent: string) => void; // Used for "Reject" (updating suggestion)
   fileName?: string;
   onOpenFile?: () => void;
+  projectDir?: string; // Directory of the current project for image storage
 }
 
 function highlightLatex(code: string): JSX.Element[] {
@@ -76,7 +79,7 @@ function highlightLatex(code: string): JSX.Element[] {
   });
 }
 
-export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, onOpenFile }: LatexEditorProps) {
+export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, onOpenFile, projectDir }: LatexEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -85,6 +88,35 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
   const [showImages, setShowImages] = useState(false);
   const [images, setImages] = useState<UploadedImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [isLoadingImages, setIsLoadingImages] = useState(false);
+
+  // Load existing images from project directory
+  useEffect(() => {
+    const loadExistingImages = async () => {
+      if (!projectDir || !electronApi.isElectron()) return;
+
+      setIsLoadingImages(true);
+      try {
+        const result = await electronApi.listImages(projectDir);
+        if (result.success && result.images) {
+          const loadedImages: UploadedImage[] = result.images.map(img => ({
+            id: img.name,
+            name: img.name,
+            url: `file://${img.path}`,
+            latexRef: `\\includegraphics[width=0.8\\textwidth]{images/${img.name}}`,
+            filePath: img.path
+          }));
+          setImages(loadedImages);
+        }
+      } catch (error) {
+        console.error('Error loading images:', error);
+      } finally {
+        setIsLoadingImages(false);
+      }
+    };
+
+    loadExistingImages();
+  }, [projectDir]);
 
   // Helper to construct content from diff, optionally accepting/rejecting a specific chunk
   const applyChunkAction = (action: 'keep' | 'reject', chunkIndex: number, chunks: DiffChunk[]) => {
@@ -251,33 +283,70 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
     }
   };
 
-  const handleFileSelect = (files: FileList | null) => {
+  const handleFileSelect = async (files: FileList | null) => {
     if (!files) return;
 
-    Array.from(files).forEach((file) => {
+    for (const file of Array.from(files)) {
       if (!file.type.startsWith("image/")) {
         toast({
           title: "Error",
           description: "Only image files are allowed",
           variant: "destructive",
         });
-        return;
+        continue;
       }
 
       const reader = new FileReader();
-      reader.onload = (e) => {
-        const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      reader.onload = async (e) => {
+        const base64Data = e.target?.result as string;
         const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
-        const newImage: UploadedImage = {
-          id,
-          name: file.name,
-          url: e.target?.result as string,
-          latexRef: `\\includegraphics[width=0.8\\textwidth]{${safeName}}`,
-        };
-        setImages((prev) => [...prev, newImage]);
+        const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+
+        // If we have a project directory, save to disk
+        if (projectDir && electronApi.isElectron()) {
+          try {
+            const result = await electronApi.saveImage(projectDir, safeName, base64Data);
+            if (result.success && result.path) {
+              const newImage: UploadedImage = {
+                id,
+                name: safeName,
+                url: `file://${result.path}`,
+                latexRef: `\\includegraphics[width=0.8\\textwidth]{images/${safeName}}`,
+                filePath: result.path
+              };
+              setImages((prev) => [...prev, newImage]);
+              toast({
+                title: "Image saved",
+                description: `${safeName} saved to project`,
+              });
+            } else {
+              toast({
+                title: "Error saving image",
+                description: result.error || "Unknown error",
+                variant: "destructive",
+              });
+            }
+          } catch (error) {
+            console.error('Error saving image:', error);
+            toast({
+              title: "Error saving image",
+              description: String(error),
+              variant: "destructive",
+            });
+          }
+        } else {
+          // Fallback: just keep in memory (for non-Electron or no project)
+          const newImage: UploadedImage = {
+            id,
+            name: file.name,
+            url: base64Data,
+            latexRef: `\\includegraphics[width=0.8\\textwidth]{${safeName}}`,
+          };
+          setImages((prev) => [...prev, newImage]);
+        }
       };
       reader.readAsDataURL(file);
-    });
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -319,7 +388,24 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
     }
   };
 
-  const deleteImage = (id: string) => {
+  const deleteImage = async (id: string) => {
+    const imageToDelete = images.find(img => img.id === id);
+
+    if (imageToDelete && projectDir && electronApi.isElectron()) {
+      try {
+        const result = await electronApi.deleteImage(projectDir, imageToDelete.name);
+        if (!result.success) {
+          toast({
+            title: "Error deleting image",
+            description: result.error || "Unknown error",
+            variant: "destructive",
+          });
+        }
+      } catch (error) {
+        console.error('Error deleting image:', error);
+      }
+    }
+
     setImages((prev) => prev.filter((img) => img.id !== id));
   };
 

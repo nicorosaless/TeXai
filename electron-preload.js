@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createFile: (dirPath, fileName) => ipcRenderer.invoke('file:create', dirPath, fileName),
     readDirectoryFiles: (dirPath) => ipcRenderer.invoke('directory:readFiles', dirPath),
 
+    // Image operations
+    saveImage: (projectDir, fileName, base64Data) => ipcRenderer.invoke('image:save', projectDir, fileName, base64Data),
+    listImages: (projectDir) => ipcRenderer.invoke('image:list', projectDir),
+    deleteImage: (projectDir, fileName) => ipcRenderer.invoke('image:delete', projectDir, fileName),
+
     // Check if running in Electron
     isElectron: true,
 

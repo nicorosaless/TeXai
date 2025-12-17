@@ -48,6 +48,28 @@ export interface ElectronAPI {
         error?: string;
     }>;
 
+    // Image operations
+    saveImage: (projectDir: string, fileName: string, base64Data: string) => Promise<{
+        success: boolean;
+        path?: string;
+        name?: string;
+        error?: string;
+    }>;
+
+    listImages: (projectDir: string) => Promise<{
+        success: boolean;
+        images?: Array<{
+            name: string;
+            path: string;
+        }>;
+        error?: string;
+    }>;
+
+    deleteImage: (projectDir: string, fileName: string) => Promise<{
+        success: boolean;
+        error?: string;
+    }>;
+
     isElectron: boolean;
     platform: string;
 }
@@ -108,4 +130,26 @@ export const readDirectoryFiles = async (dirPath: string) => {
         throw new Error('Directory operations are only available in Electron');
     }
     return electronAPI.readDirectoryFiles(dirPath);
+};
+
+// Image operations
+export const saveImage = async (projectDir: string, fileName: string, base64Data: string) => {
+    if (!isElectron() || !electronAPI) {
+        throw new Error('Image operations are only available in Electron');
+    }
+    return electronAPI.saveImage(projectDir, fileName, base64Data);
+};
+
+export const listImages = async (projectDir: string) => {
+    if (!isElectron() || !electronAPI) {
+        throw new Error('Image operations are only available in Electron');
+    }
+    return electronAPI.listImages(projectDir);
+};
+
+export const deleteImage = async (projectDir: string, fileName: string) => {
+    if (!isElectron() || !electronAPI) {
+        throw new Error('Image operations are only available in Electron');
+    }
+    return electronAPI.deleteImage(projectDir, fileName);
 };
