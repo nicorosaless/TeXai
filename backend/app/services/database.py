@@ -66,6 +66,15 @@ async def init_database():
             )
         """)
         
+        # Tabla de configuración (API keys, etc)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        
         await db.commit()
 
 
@@ -271,7 +280,43 @@ class ConversationService:
             return cursor.rowcount > 0
 
 
+class SettingsService:
+    """Servicio para gestionar configuración global"""
+    
+    @staticmethod
+    async def set(key: str, value: str):
+        """Establece un valor de configuración"""
+        now = datetime.utcnow().isoformat()
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+                (key, value, now)
+            )
+            await db.commit()
+            
+    @staticmethod
+    async def get(key: str) -> Optional[str]:
+        """Obtiene un valor de configuración"""
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = await cursor.fetchone()
+            if row:
+                return row["value"]
+            return None
+
+    @staticmethod
+    async def list_all() -> dict:
+        """Lista toda la configuración"""
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT key, value FROM settings")
+            rows = await cursor.fetchall()
+            return {row["key"]: row["value"] for row in rows}
+
+
 # Instancias de servicios
 document_service = DocumentService()
 conversation_service = ConversationService()
+settings_service = SettingsService()
 

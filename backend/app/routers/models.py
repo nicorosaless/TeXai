@@ -2,8 +2,8 @@
 Router para gestión de modelos de Ollama
 """
 
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict
+from fastapi import APIRouter, HTTPException, Query
+from typing import List, Dict, Optional
 from app.services.ai_service import ai_service
 
 router = APIRouter()
@@ -12,27 +12,15 @@ router = APIRouter()
 @router.get("/models", response_model=List[Dict])
 async def list_models():
     """
-    Lista todos los modelos disponibles en Ollama
-    
-    Usa 'ollama list' para obtener la lista de modelos instalados
+    Lista todos los modelos disponibles (Ollama + OpenRouter Free + Configurados)
     """
     try:
-        models = ai_service.get_available_models()
+        models = await ai_service.get_available_models()
         return models
-    except FileNotFoundError as e:
-        raise HTTPException(
-            status_code=503,
-            detail="Ollama no está instalado o no está en el PATH. Por favor, instala Ollama desde https://ollama.ai"
-        )
-    except RuntimeError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Error al obtener la lista de modelos: {str(e)}"
-        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error inesperado: {str(e)}"
+            detail=f"Error inesperado al listar modelos: {str(e)}"
         )
 
 
@@ -57,3 +45,6 @@ async def set_current_model(model_name: str):
         "model": ai_service.model,
         "status": "updated"
     }
+
+
+

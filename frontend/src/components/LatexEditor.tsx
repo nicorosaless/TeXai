@@ -68,10 +68,11 @@ function highlightLatex(code: string): JSX.Element[] {
     }
 
     return (
-      <div key={index} className="flex" style={{ color: textColor }}>
-        <span className="editor-line-number" style={{ color: lineNumberColor }}>{index + 1}</span>
+      <div key={index} className="flex leading-6" style={{ color: textColor }}>
+        <span className="editor-line-number shrink-0" style={{ color: lineNumberColor, width: '4rem', paddingRight: '1rem' }}>{index + 1}</span>
         <span
-          style={{ color: textColor }}
+          className="flex-1"
+          style={{ color: textColor, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
           dangerouslySetInnerHTML={{ __html: highlighted || "\u00A0" }}
         />
       </div>
@@ -552,10 +553,10 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
                   if (chunk.type === 'unchanged') {
                     return chunk.lines.map((line, idx) => (
                       <div key={`${chunk.id}-${idx}`} className="flex text-[hsl(40,6%,90%)] opacity-50">
-                        <span className="w-8 text-right mr-4 text-[hsl(40,4%,50%)] select-none">
+                        <span className="w-8 shrink-0 text-right mr-4 text-[hsl(40,4%,50%)] select-none">
                           {line.oldLineNum}
                         </span>
-                        <span className="flex-1 whitespace-pre">{line.content || ' '}</span>
+                        <span className="flex-1" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{line.content || ' '}</span>
                       </div>
                     ));
                   } else {
@@ -593,10 +594,10 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
                                 : 'bg-red-500/10 text-red-300 line-through decoration-red-500/30'
                                 }`}
                             >
-                              <span className="w-8 text-right mr-4 select-none opacity-50">
+                              <span className="w-8 shrink-0 text-right mr-4 select-none opacity-50">
                                 {line.type === 'added' ? '+' : '-'}
                               </span>
-                              <span className="flex-1 whitespace-pre">{line.content || ' '}</span>
+                              <span className="flex-1" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{line.content || ' '}</span>
                             </div>
                           ))}
                         </div>
@@ -610,11 +611,15 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
             <>
               <div
                 ref={highlightRef}
-                className="absolute inset-0 p-4 font-mono text-sm leading-6 overflow-auto pointer-events-none whitespace-pre scrollbar-thin z-0"
+                className="absolute inset-0 pt-4 pr-4 pb-4 pl-0 font-mono text-sm leading-6 overflow-auto pointer-events-none scrollbar-thin z-0"
                 aria-hidden="true"
                 style={{
                   color: 'hsl(40, 6%, 90%)',
-                  backgroundColor: 'hsl(43, 25%, 6%)'
+                  backgroundColor: 'hsl(43, 25%, 6%)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  overflowWrap: 'anywhere',
+                  boxSizing: 'border-box'
                 }}
               >
                 {highlightLatex(content)}
@@ -625,10 +630,14 @@ export function LatexEditor({ content, onChange, diff, onDiffChange, fileName, o
                 value={content}
                 onChange={(e) => onChange(e.target.value)}
                 onScroll={syncScroll}
-                className="absolute inset-0 w-full h-full p-4 pl-16 font-mono text-sm leading-6 bg-transparent text-transparent caret-foreground resize-none focus:outline-none scrollbar-thin z-10"
+                className="absolute inset-0 w-full h-full pt-4 pr-4 pb-4 pl-16 font-mono text-sm leading-6 bg-transparent text-transparent caret-foreground resize-none focus:outline-none scrollbar-thin z-10"
                 spellCheck={false}
                 style={{
-                  caretColor: 'hsl(40, 6%, 90%)'
+                  caretColor: 'hsl(40, 6%, 90%)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  overflowWrap: 'anywhere',
+                  boxSizing: 'border-box'
                 }}
               />
             </>

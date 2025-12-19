@@ -8,8 +8,22 @@ import json
 import re
 import subprocess
 from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
+
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
+
+try:
+    from anthropic import AsyncAnthropic
+except ImportError:
+    AsyncAnthropic = None
+
 from app.core.config import settings
 from app.models.schemas import Message, MessageRole
+from app.services.database import settings_service
+from app.services.openrouter_scraper import get_free_openrouter_models
+import httpx
 
 
 def parse_llm_response(response_text: str) -> Tuple[str, List[Dict[str, Any]]]:
@@ -97,7 +111,7 @@ def apply_changes(original: str, changes: List[Dict[str, Any]]) -> str:
     return result
 
 class AIService:
-    """Servicio principal de IA usando Ollama"""
+    """Servicio principal de IA usando Ollama y proveedores externos"""
     
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL
@@ -108,19 +122,45 @@ class AIService:
         """Inicializa cliente de Ollama"""
         try:
             import ollama
-            self.client = ollama.AsyncClient(host=self.base_url)
+            self.ollama_client = ollama.AsyncClient(host=self.base_url)
         except ImportError:
             raise ImportError("ollama no está instalado. Ejecuta: pip install ollama")
         except Exception as e:
-            raise ConnectionError(f"No se pudo conectar a Ollama en {self.base_url}. Asegúrate de que Ollama esté ejecutándose. Error: {str(e)}")
+            # No lanzar error al inicio, para permitir que otros proveedores funcionen
+            print(f"Warning: No se pudo conectar a Ollama en {self.base_url}. {str(e)}")
+            self.ollama_client = None
+
+    async def _get_external_client(self, provider: str):
+        """Obtiene el cliente para un proveedor externo"""
+        api_key = await settings_service.get(f"{provider}_api_key")
+        if not api_key:
+            return None
+
+        if provider == "openai" and AsyncOpenAI:
+            return AsyncOpenAI(api_key=api_key)
+        elif provider == "anthropic" and AsyncAnthropic:
+            return AsyncAnthropic(api_key=api_key)
+        elif provider == "openrouter" and AsyncOpenAI:
+            return AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://openrouter.ai/api/v1",
+                default_headers={
+                    "HTTP-Referer": "https://github.com/nicorosaless/TeXai",
+                    "X-Title": "TeXai",
+                }
+            )
+        return None
     
-    def get_available_models(self) -> List[dict]:
+    async def get_available_models(self) -> List[dict]:
         """
-        Obtiene la lista de modelos disponibles usando 'ollama list'
+        Obtiene la lista de modelos disponibles de Ollama y OpenRouter Free
         
         Returns:
             Lista de modelos disponibles con su información
         """
+        all_models = []
+        
+        # 1. Ollama Models
         try:
             result = subprocess.run(
                 ["ollama", "list"],
@@ -129,7 +169,6 @@ class AIService:
                 check=True
             )
             
-            models = []
             lines = result.stdout.strip().split('\n')
             
             # Saltar la línea de encabezado
@@ -139,21 +178,55 @@ class AIService:
                     if len(parts) >= 2:
                         model_name = parts[0]
                         size = parts[1] if len(parts) > 1 else "N/A"
-                        modified = parts[2] if len(parts) > 2 else "N/A"
-                        digest = parts[3] if len(parts) > 3 else "N/A"
                         
-                        models.append({
+                        all_models.append({
                             "name": model_name,
-                            "size": size,
-                            "modified": modified,
-                            "digest": digest
+                            "id": model_name,
+                            "provider": "ollama",
+                            "size": size
                         })
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # Ignorar si Ollama no está disponible
+            pass
             
-            return models
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Error al ejecutar 'ollama list': {str(e)}")
-        except FileNotFoundError:
-            raise FileNotFoundError("Ollama no está instalado o no está en el PATH")
+        # 2. OpenRouter Free Models
+        try:
+            selected_models_json = await settings_service.get("openrouter_selected_models")
+            selected_ids = []
+            if selected_models_json:
+                try:
+                    import json
+                    selected_ids = json.loads(selected_models_json)
+                except:
+                    pass
+            
+            if selected_ids:
+                free_models = await get_free_openrouter_models()
+                for m in free_models:
+                    if m["id"] in selected_ids:
+                        all_models.append({
+                            "name": m["name"],
+                            "id": m["id"],
+                            "provider": "openrouter",
+                            "category": "free"
+                        })
+        except Exception as e:
+            print(f"Error filtering OpenRouter models: {e}")
+            
+        # 3. User configured models (OpenAI, Anthropic)
+        # Podríamos listar modelos específicos si tenemos las keys, 
+        # pero por ahora solo pondremos los generales si hay key.
+        for provider in ["openai", "anthropic"]:
+            key = await settings_service.get(f"{provider}_api_key")
+            if key:
+                if provider == "openai":
+                    all_models.append({"name": "GPT-4o", "id": "gpt-4o", "provider": "openai"})
+                    all_models.append({"name": "GPT-4o mini", "id": "gpt-4o-mini", "provider": "openai"})
+                elif provider == "anthropic":
+                    all_models.append({"name": "Claude 3.5 Sonnet", "id": "claude-3-5-sonnet-20241022", "provider": "anthropic"})
+                    all_models.append({"name": "Claude 3.5 Haiku", "id": "claude-3-5-haiku-20241022", "provider": "anthropic"})
+
+        return all_models
     
     def _build_system_prompt(self) -> str:
         """Construye el prompt del sistema para el asistente de LaTeX"""
@@ -245,46 +318,108 @@ Asistente:"""
         model_to_use = model or self.model
         
         try:
-            if stream:
-                async def generate():
-                    """
-                    Genera chunks tipados para streaming.
-                    Cada chunk tiene: type ('thinking' o 'response'), content (texto)
-                    """
-                    # Ollama AsyncClient.generate with stream=True returns an async generator
-                    stream_response = await self.client.generate(
+            # Determinar el proveedor basado en el modelo
+            # (Heurística simple o check de IDs comunes)
+            provider = "ollama"
+            if model_to_use.startswith("gpt"):
+                provider = "openai"
+            elif model_to_use.startswith("claude"):
+                provider = "anthropic"
+            elif "/" in model_to_use: # openrouter models are usually vendor/model
+                provider = "openrouter"
+
+            if provider == "ollama":
+                if not self.ollama_client:
+                    raise RuntimeError("Ollama no está disponible")
+                if stream:
+                    async def generate():
+                        stream_response = await self.ollama_client.generate(
+                            model=model_to_use,
+                            prompt=prompt,
+                            stream=True,
+                            options={
+                                "temperature": settings.TEMPERATURE,
+                                "num_predict": settings.MAX_TOKENS
+                            }
+                        )
+                        async for chunk in stream_response:
+                            if chunk.get("thinking"):
+                                yield {"type": "thinking", "content": chunk["thinking"]}
+                            if chunk.get("response"):
+                                yield {"type": "response", "content": chunk["response"]}
+                    return generate()
+                else:
+                    response = await self.ollama_client.generate(
                         model=model_to_use,
                         prompt=prompt,
-                        stream=True,
+                        stream=False,
                         options={
                             "temperature": settings.TEMPERATURE,
                             "num_predict": settings.MAX_TOKENS
                         }
                     )
-                    async for chunk in stream_response:
-                        # Para modelos CoT como DeepSeek R1, Ollama envía
-                        # 'thinking' en chunks separados antes de 'response'
-                        if chunk.get("thinking"):
-                            yield {"type": "thinking", "content": chunk["thinking"]}
-                        if chunk.get("response"):
-                            yield {"type": "response", "content": chunk["response"]}
-                return generate()
-            else:
-                response = await self.client.generate(
-                    model=model_to_use,
-                    prompt=prompt,
-                    stream=False,
-                    options={
-                        "temperature": settings.TEMPERATURE,
-                        "num_predict": settings.MAX_TOKENS
+                    return {
+                        "response": response.get("response", ""),
+                        "thinking": response.get("thinking", None)
                     }
-                )
-                return {
-                    "response": response.get("response", ""),
-                    "thinking": response.get("thinking", None)  # CoT thinking tokens
-                }
+            else:
+                # Proveedores externos
+                external_client = await self._get_external_client(provider)
+                if not external_client:
+                    raise RuntimeError(f"API key para {provider} no configurada")
+
+                if provider in ["openai", "openrouter"]:
+                    if stream:
+                        async def generate():
+                            stream_response = await external_client.chat.completions.create(
+                                model=model_to_use,
+                                messages=[{"role": "user", "content": prompt}],
+                                stream=True,
+                                temperature=settings.TEMPERATURE,
+                                max_tokens=settings.MAX_TOKENS
+                            )
+                            async for chunk in stream_response:
+                                content = chunk.choices[0].delta.content
+                                if content:
+                                    yield {"type": "response", "content": content}
+                        return generate()
+                    else:
+                        response = await external_client.chat.completions.create(
+                            model=model_to_use,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=settings.TEMPERATURE,
+                            max_tokens=settings.MAX_TOKENS
+                        )
+                        return {
+                            "response": response.choices[0].message.content,
+                            "thinking": None
+                        }
+                elif provider == "anthropic":
+                    if stream:
+                        async def generate():
+                            async with external_client.messages.stream(
+                                model=model_to_use,
+                                max_tokens=settings.MAX_TOKENS,
+                                temperature=settings.TEMPERATURE,
+                                messages=[{"role": "user", "content": prompt}]
+                            ) as stream_handle:
+                                async for text in stream_handle.text_stream:
+                                    yield {"type": "response", "content": text}
+                        return generate()
+                    else:
+                        response = await external_client.messages.create(
+                            model=model_to_use,
+                            max_tokens=settings.MAX_TOKENS,
+                            temperature=settings.TEMPERATURE,
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                        return {
+                            "response": response.content[0].text,
+                            "thinking": None
+                        }
+
         except Exception as e:
-            raise RuntimeError(f"Error al comunicarse con Ollama: {str(e)}")
+            raise RuntimeError(f"Error al comunicarse con {provider}: {str(e)}")
     
     async def analyze_latex(self, latex_content: str, model: Optional[str] = None) -> dict:
         """
@@ -318,17 +453,24 @@ Responde SOLO con un JSON válido con esta estructura:
         model_to_use = model or self.model
         
         try:
-            response = await self.client.generate(
-                model=model_to_use,
-                prompt=analysis_prompt,
-                stream=False,
-                options={
-                    "temperature": 0.3,  # Más determinístico para análisis
-                    "num_predict": settings.MAX_TOKENS
-                }
-            )
-            
-            response_text = response.get("response", "")
+            # Por ahora, análisis siempre usa Ollama por velocidad/costo,
+            # pero podríamos parametrizarlo igual que chat.
+            if not self.ollama_client:
+                 # Fallback a chat normal si no hay Ollama? 
+                 # O simplemente intentar usar el modelo actual
+                 res = await self.chat(user_message=analysis_prompt, latex_content="", model=model_to_use)
+                 response_text = res.get("response", "")
+            else:
+                response = await self.ollama_client.generate(
+                    model=model_to_use,
+                    prompt=analysis_prompt,
+                    stream=False,
+                    options={
+                        "temperature": 0.3,  # Más determinístico para análisis
+                        "num_predict": settings.MAX_TOKENS
+                    }
+                )
+                response_text = response.get("response", "")
             # Extraer JSON de la respuesta
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
@@ -378,27 +520,23 @@ IMPORTANT: Do not include headers like "[Explanation of changes]" or "**Explanat
         model_to_use = model or self.model
         
         try:
-            stream_response = await self.client.generate(
-                model=model_to_use,
-                prompt=improvement_prompt,
+            # Usamos el método chat genérico que ya maneja proveedores
+            stream_gen = await self.chat(
+                user_message=improvement_prompt,
+                latex_content="", # El prompt ya contiene el LaTeX
                 stream=True,
-                options={
-                    "temperature": settings.TEMPERATURE,
-                    "num_predict": settings.MAX_TOKENS
-                }
+                model=model_to_use
             )
             
             buffer = ""
             header_checked = False
             
-            async for chunk in stream_response:
-                # Handle thinking tokens
-                if chunk.get("thinking"):
-                    yield {"type": "thinking", "content": chunk["thinking"]}
+            async for chunk in stream_gen:
+                if chunk["type"] == "thinking":
+                    yield {"type": "thinking", "content": chunk["content"]}
                 
-                # Handle response text
-                if chunk.get("response"):
-                    content = chunk["response"]
+                if chunk["type"] == "response":
+                    content = chunk["content"]
                     
                     if not header_checked:
                         buffer += content

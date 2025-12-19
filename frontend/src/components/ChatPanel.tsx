@@ -1,16 +1,19 @@
 // ... imports ...
 import { useState, useEffect, useRef } from "react";
-import { Send, ChevronDown, PanelLeftClose, PanelLeft, Check, X, Plus, Minus, BrainCircuit, Loader2 } from "lucide-react";
+import { Send, ChevronDown, PanelLeftClose, PanelLeft, Check, X, Plus, Minus, BrainCircuit, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { apiService, type Message as ApiMessage } from "@/services/api";
+import { apiService, type Message as ApiMessage, type OllamaModel } from "@/services/api";
 import { useToast } from "@/hooks/use-toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SettingsPanel } from "./SettingsPanel";
 
 const ThinkingBlock = ({ content }: { content: string }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -154,7 +157,8 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [currentModel, setCurrentModel] = useState<string>("Ollama");
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -173,9 +177,9 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
         apiService.listModels()
       ]);
       setCurrentModel(modelInfo.model || "Ollama");
-      setAvailableModels(modelsList.map(m => m.name));
+      setAvailableModels(modelsList);
     } catch (error) {
-      console.error("Error loading model:", error);
+      console.error("Error loading models:", error);
       setAvailableModels([]);
     }
   };
@@ -578,29 +582,67 @@ export function ChatPanel({ onApplyChange, onSuggestion, currentLatex, isCollaps
         </div>
 
         {/* Model Selector below input */}
-        <div className="flex items-center mt-2 justify-between">
+        <div className="flex items-center mt-2 gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <div className="flex items-center gap-2 px-2 py-1 rounded bg-secondary/50 text-muted-foreground text-xs cursor-pointer hover:bg-secondary transition-colors">
-                <span>{currentModel}</span>
-                <ChevronDown className="h-3 w-3" />
+              <div className="flex-1 flex items-center justify-between px-2 py-1 rounded bg-secondary/50 text-muted-foreground text-xs cursor-pointer hover:bg-secondary transition-colors group">
+                <span className="truncate">{currentModel}</span>
+                <ChevronDown className="h-3 w-3 opacity-50 group-hover:opacity-100 transition-opacity" />
               </div>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[200px]">
+            <DropdownMenuContent align="start" className="w-[240px] max-h-[300px] overflow-y-auto scrollbar-thin">
               {availableModels.length > 0 ? (
-                availableModels.map((model) => (
-                  <DropdownMenuItem key={model} onClick={() => handleModelChange(model)}>
-                    {model}
-                    {model === currentModel && <Check className="ml-auto h-3 w-3" />}
-                  </DropdownMenuItem>
-                ))
+                <>
+                  {["ollama", "openai", "anthropic", "openrouter"].map(provider => {
+                    const providerModels = availableModels.filter(m => m.provider === provider);
+                    if (providerModels.length === 0) return null;
+
+                    return (
+                      <div key={provider}>
+                        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider opacity-50 px-2 py-1">
+                          {provider}
+                        </DropdownMenuLabel>
+                        {providerModels.map((model) => (
+                          <DropdownMenuItem
+                            key={model.id}
+                            onClick={() => handleModelChange(model.id)}
+                            className="text-xs flex items-center justify-between"
+                          >
+                            <span className="truncate">{model.name}</span>
+                            {model.id === currentModel && <Check className="h-3 w-3 text-primary" />}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                      </div>
+                    );
+                  })}
+                </>
               ) : (
                 <DropdownMenuItem disabled>No models found</DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            onClick={() => setIsSettingsOpen(true)}
+            title="AI Settings"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
+
+      {isSettingsOpen && (
+        <SettingsPanel
+          onClose={() => {
+            setIsSettingsOpen(false);
+            loadCurrentModel(); // Reload models in case keys changed
+          }}
+        />
+      )}
     </div>
   );
 }

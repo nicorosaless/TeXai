@@ -81,9 +81,10 @@ export interface ImproveResponse {
 
 export interface OllamaModel {
   name: string;
-  size: string;
-  modified: string;
-  digest: string;
+  id: string;
+  provider: "ollama" | "openai" | "anthropic" | "openrouter";
+  size?: string;
+  category?: string;
 }
 
 export interface Document {
@@ -445,6 +446,38 @@ class ApiService {
       method: "DELETE",
     });
     if (!response.ok) throw new Error("Failed to delete document");
+  }
+
+  // ============ Settings API ============
+
+  /**
+   * Obtiene toda la configuración
+   */
+  async getSettings(): Promise<Record<string, string>> {
+    const response = await fetch(`${this.baseUrl}/api/v1/settings`);
+    if (!response.ok) throw new Error("Failed to fetch settings");
+    return response.json();
+  }
+
+  /**
+   * Actualiza una configuración
+   */
+  async updateSetting(key: string, value: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/v1/settings/${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    });
+    if (!response.ok) throw new Error(`Failed to update setting ${key}`);
+  }
+
+  /**
+   * Obtiene modelos gratuitos de OpenRouter
+   */
+  async getOpenRouterModels(): Promise<any[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/openrouter/available-models`);
+    if (!response.ok) throw new Error("Failed to fetch OpenRouter models");
+    return response.json();
   }
 }
 
